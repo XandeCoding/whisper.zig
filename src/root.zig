@@ -1,7 +1,9 @@
 const std = @import("std");
 pub const c = @import("c");
 
-pub const WhisperError = error {
+pub const MAX_F32_NUMBER: f32 = 32768.0;
+
+pub const WhisperError = error{
     InitializationError,
     TranscriptionFailed,
     InvalidWavHeader,
@@ -33,17 +35,17 @@ pub const Segment = struct {
 };
 
 pub const TranscribeOptions = struct {
-    threads: u8 = 2,
+    threads: u8 = 4,
     translate: bool = false,
     language: ?[:0]const u8 = null, // DEFAULT = AUTO_DETECT
 
     pub fn toC(self: TranscribeOptions) c.whisper_full_params {
         var params = c.whisper_full_default_params(
             c.WHISPER_SAMPLING_GREEDY,
-        ); 
+        );
         params.n_threads = @as(c_int, self.threads);
         params.translate = self.translate;
-        
+
         if (self.language) |language| {
             params.language = language.ptr;
         } else {
@@ -88,7 +90,7 @@ pub const Context = struct {
 
     /// Transcribe the text received
     pub fn transcribe(
-        self: *Context, 
+        self: *Context,
         samples: []const f32,
         options: TranscribeOptions,
     ) WhisperError!void {
@@ -120,64 +122,64 @@ pub const Context = struct {
     }
 };
 
-
 /// Module to handle audio files
 /// REFACT TO HANDLE FILES AND STREAMING
 fn open_file(io: std.Io, file_path: []const u8) !std.Io.File {
     // TODO: HANDLE ABSOLUTE PATH
     const directory = std.Io.Dir.cwd();
     const file = try directory.openFile(io, file_path, .{});
-    
+
     return file;
 }
 
-pub fn get_wav_file_samples(
-    io: std.Io, 
-    allocator: std.mem.Allocator,
-    file_path: []const u8
-) ![]f32 {
+pub fn get_wav_file_samples(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) ![]f32 {
     const file = try open_file(io, file_path);
     defer file.close(io);
 
-    // Check if has valid Header 
+    // Check if has valid Header
     var header: [12]u8 = undefined;
     _ = try file.readPositionalAll(io, &header, 0);
-    if (
-        (!std.mem.eql(u8, header[0..4], "RIFF") or
-         !std.mem.eql(u8, header[8..12], "WAVE"))
-        ) {
+    if ((!std.mem.eql(u8, header[0..4], "RIFF") or
+        !std.mem.eql(u8, header[8..12], "WAVE")))
+    {
         return error.InvalidWavHeader;
     }
 
-    // TODO: LER POR BLOCOS DELIMITADOS POR EOF OU /n - CHECAR
-    // TODO: Corrigir tamanho do buffer 
-    var buffer: [1024 * 1024]u8 = undefined;
-    _ = try file.readPositionalAll(io, &buffer, header.len);
+    const file_length = try file.length(io);
+    const buffer = try allocator.alloc(u8, file_length);
+    defer allocator.free(buffer);
 
-    std.debug.print("\n -- TESTE: {s}", .{ buffer[0..100] });
-    const data_start_index = std.mem.indexOf(u8, &buffer, "data");
+    _ = try file.readPositionalAll(io, buffer, header.len);
 
-    if (data_start_index == null) {
+    const data_header_index = std.mem.indexOf(u8, buffer, "data") orelse {
         return error.InvalidWavData;
-    }
+    };
 
+    // The data size info it's after the data header and has 4 bytes
+    const audio_start_index = data_header_index + 8;
+    const data_size_header = buffer[data_header_index + 4 .. audio_start_index];
+    const data_size = std.mem.readInt(
+        u32,
+        data_size_header[0..4],
+        .little,
+    );
     // How the data it's 16 bits and each item has 8 bit, to calculate it's only
     // necessary to divide for 2
-    // TODO: REMOVER ESSE ENFORCE DE TIPO
-    const data_index = data_start_index orelse 0;
-    const samples_len = (buffer.len - data_index) / 2;
-    //const samples_len = 10;
-    const samples = try allocator.alloc(f32, samples_len);
+    const chunks_len = data_size / 2;
+    const samples = try allocator.alloc(f32, chunks_len);
     errdefer allocator.free(samples);
 
-    for (0 .. samples_len) |index| {
-        var number: [2]u8 = .{ buffer[index], buffer[index+1] };
-        const sample = std.mem.readInt(i16, &number, .little);
-        std.debug.print("\nNumber: {s} -> {d}", .{ number, sample });
-        samples[index] = @as(f32, @floatFromInt(sample));
+    for (0..chunks_len) |index| {
+        const buffer_index = audio_start_index + (index * 2);
+        const sample = std.mem.readInt(
+            i16,
+            &[_]u8{ buffer[buffer_index], buffer[buffer_index + 1] },
+            .little,
+        );
+        // Whisper uses a number between -1 and 1, for this it's necessary to divide
+        // for the greater number possible handled in a f32 type
+        samples[index] = @as(f32, @floatFromInt(sample)) / MAX_F32_NUMBER;
     }
-    
+
     return samples;
 }
-
-

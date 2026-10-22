@@ -17,14 +17,9 @@ pub fn build(b: *std.Build) void {
     const c_module = translate_c.createModule();
     include_ggml_lib(b, whisper_cpp, c_module);
 
-    const whisper_zig = b.addModule("whisper_zig", .{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "c", .module = c_module },
-        }
-    });
+    const whisper_zig = b.addModule("whisper_zig", .{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize, .imports = &.{
+        .{ .name = "c", .module = c_module },
+    } });
 
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -40,8 +35,31 @@ pub fn build(b: *std.Build) void {
 
     const run_tests = b.addRunArtifact(tests);
     b.step("test", "Run tests").dependOn(&run_tests.step);
-}
 
+    const exe = b.addExecutable(.{
+        .name = "main",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("src/main.zig"),
+            .imports = &.{
+                .{ .name = "whisper", .module = whisper_zig },
+            },
+            .link_libcpp = true,
+        }),
+    });
+    exe.root_module.addImport("c", c_module);
+    b.installArtifact(exe);
+
+    // Create "run" step for the example
+    const run_cmd = b.addRunArtifact(exe);
+    run_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+    const run_step = b.step("run", "Run the example application");
+    run_step.dependOn(&run_cmd.step);
+}
 
 fn include_ggml_lib(b: *std.Build, dep: *std.Build.Dependency, module: *std.Build.Module) void {
     // Gera o ggml-version.h que o CMake gerava -- Talvez gerar de forma estática no projeto
@@ -79,7 +97,7 @@ fn include_ggml_lib(b: *std.Build, dep: *std.Build.Dependency, module: *std.Buil
     for (c_sources) |src| {
         module.addCSourceFile(.{
             .file = dep.path(src),
-            .flags = &.{ "-fno-sanitize=undefined" },
+            .flags = &.{"-fno-sanitize=undefined"},
         });
     }
     // 3. Fontes em C++ (C++17)
