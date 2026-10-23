@@ -24,24 +24,21 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
     // 1. Configure and load the model
-    var params = whisper.Context.defaultParams();
-    params.use_gpu = false;
-    params.flash_attn = false;
-
     var context = try whisper.Context.initFromFile(
         "assets/ggml-tiny.en.bin",
-        params,
+        .{ .log_level = whisper.LogLevel.ERROR },
     );
     defer context.deinit();
 
-    // 2. Load audio samples (16kHz mono)
-    const samples = try whisper.get_wav_file_samples(io, allocator, "assets/jfk.wav");
-    defer allocator.free(samples);
+    // 2. Transcribe audio (must be 16kHz mono)
+    try context.transcribe(
+        io,
+        allocator,
+        "assets/jfk.wav",
+        .{ .language = "en", .threads = 4 },
+    );
 
-    // 3. Transcribe
-    try context.transcribe(samples, .{ .language = "en" });
-
-    // 4. Retrieve segments
+    // 3. Retrieve segments
     std.log.debug("Transcribed text:", .{});
     for (0..context.segmentCount()) |i| {
         const seg = context.getSegment(i);
@@ -56,7 +53,6 @@ pub fn main(init: std.process.Init) !void {
 
 ## Roadmap
 
-- [ ] Support audio files longer than 30 seconds
 - [ ] MP3 audio support
 - [ ] GPU Acceleration
 - [ ] Real-time streaming callbacks 

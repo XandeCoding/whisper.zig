@@ -1,6 +1,7 @@
 const std = @import("std");
 pub const c = @import("c");
 
+var LOG_LEVEL = LogLevel.DEBUG;
 pub const MAX_F32_NUMBER: f32 = 32768.0;
 
 pub const WhisperError = error{
@@ -8,6 +9,15 @@ pub const WhisperError = error{
     TranscriptionFailed,
     InvalidWavHeader,
     InvalidWavData,
+};
+
+pub const LogLevel = enum(u8) {
+    NONE = 0,
+    DEBUG = 1,
+    INFO = 2,
+    WARN = 3,
+    ERROR = 4,
+    CONT = 5,
 };
 
 pub const Segment = struct {
@@ -31,6 +41,20 @@ pub const Segment = struct {
     // Returns the total duration in milliseconds
     pub fn durationMs(self: Segment) i64 {
         return (self.t1 - self.t0) * 10;
+    }
+};
+
+pub const ContextOptions = struct {
+    use_gpu: bool = false,
+    flash_attn: bool = false,
+    log_level: LogLevel = LogLevel.DEBUG,
+
+    pub fn toC(self: ContextOptions) c.whisper_context_params {
+        var params = c.whisper_context_default_params();
+        params.use_gpu = self.use_gpu;
+        params.flash_attn = self.flash_attn;
+
+        return params;
     }
 };
 
@@ -59,18 +83,14 @@ pub const TranscribeOptions = struct {
 pub const Context = struct {
     instance: *c.whisper_context,
 
-    pub const Params = c.whisper_context_params;
-
-    /// Get the default params from Whisper context
-    pub fn defaultParams() Params {
-        return c.whisper_context_default_params();
-    }
-
     /// Init Whisper context from a file using it's path
     /// - `path` must be null terminated
     /// - `params` can be the default params or a customized struct
-    pub fn initFromFile(path: [:0]const u8, params: Params) WhisperError!Context {
-        const instance = c.whisper_init_from_file_with_params(path.ptr, params) orelse {
+    pub fn initFromFile(path: [:0]const u8, options: ContextOptions) WhisperError!Context {
+        // TODO: IMPROVE THIS GLOBAL USAGE
+        LOG_LEVEL = options.log_level;
+        c.whisper_log_set(handleLog, null);
+        const instance = c.whisper_init_from_file_with_params(path.ptr, options.toC()) orelse {
             return error.InitializationError;
         };
 
@@ -88,8 +108,22 @@ pub const Context = struct {
         return std.mem.span(info_ptr);
     }
 
-    /// Transcribe the text received
+    /// Transcribe the audio received
+    // TODO: AFTER THE AUDIO REFACT ADD WHISPERERROR AGAIN TO RETURN
     pub fn transcribe(
+        self: *Context,
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        audio_path: []const u8,
+        options: TranscribeOptions,
+    ) !void {
+        const samples = try get_wav_file_samples(io, allocator, audio_path);
+        defer allocator.free(samples);
+        try self.transcribeSamples(samples, options);
+    }
+
+    /// Transcribe the audio samples received
+    pub fn transcribeSamples(
         self: *Context,
         samples: []const f32,
         options: TranscribeOptions,
@@ -122,6 +156,28 @@ pub const Context = struct {
     }
 };
 
+/// Module to handle Logs
+fn handleLog(
+    level: c.ggml_log_level,
+    text: [*c]const u8,
+    user_data: ?*anyopaque,
+) callconv(.c) void {
+    if (LOG_LEVEL == LogLevel.NONE or level < @backingInt(LOG_LEVEL)) return;
+    _ = user_data;
+
+    switch (level) {
+        @backingInt(LogLevel.DEBUG) => std.log.debug("{s}", .{ text }),
+        @backingInt(LogLevel.INFO) => std.log.info("{s}", .{ text }),
+        @backingInt(LogLevel.WARN) => std.log.warn("{s}", .{ text }),
+        @backingInt(LogLevel.ERROR) => std.log.err("{s}", .{ text }),
+        // TODO: MUST BE DEBUG?
+        @backingInt(LogLevel.CONT) => std.log.debug("{s}", .{ text}),
+        else => {}
+    }
+
+}
+
+
 /// Module to handle audio files
 /// REFACT TO HANDLE FILES AND STREAMING
 fn open_file(io: std.Io, file_path: []const u8) !std.Io.File {
@@ -132,24 +188,48 @@ fn open_file(io: std.Io, file_path: []const u8) !std.Io.File {
     return file;
 }
 
-pub fn get_wav_file_samples(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) ![]f32 {
+pub fn get_wav_file_samples(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    file_path: []const u8,
+) ![]f32 {
     const file = try open_file(io, file_path);
     defer file.close(io);
 
     // Check if has valid Header
     var header: [12]u8 = undefined;
     _ = try file.readPositionalAll(io, &header, 0);
+
     if ((!std.mem.eql(u8, header[0..4], "RIFF") or
         !std.mem.eql(u8, header[8..12], "WAVE")))
     {
         return error.InvalidWavHeader;
     }
 
-    const file_length = try file.length(io);
+    const file_length = try file.length(io) - header.len;
     const buffer = try allocator.alloc(u8, file_length);
     defer allocator.free(buffer);
 
     _ = try file.readPositionalAll(io, buffer, header.len);
+
+    // Validating the format received
+    const fmt_header_index = std.mem.indexOf(u8, buffer, "fmt") orelse {
+        return error.InvalidWavData;
+    };
+
+    const audio_format = std.mem.readInt(
+        u16,
+        buffer[fmt_header_index + 8 .. fmt_header_index + 10][0..2],
+        .little,
+    );
+    const channels = std.mem.readInt(u16, buffer[fmt_header_index + 10 .. fmt_header_index + 12][0..2], .little);
+    const sample_rate = std.mem.readInt(u32, buffer[fmt_header_index + 12 .. fmt_header_index + 16][0..4], .little);
+    const bits_sample = std.mem.readInt(u16, buffer[fmt_header_index + 22 .. fmt_header_index + 24][0..2], .little);
+
+    if (audio_format != 1) return error.InvalidWavData;
+    if (channels != 1) return error.InvalidWavData;
+    if (sample_rate != 16000) return error.InvalidWavData;
+    if (bits_sample != 16) return error.InvalidWavData;
 
     const data_header_index = std.mem.indexOf(u8, buffer, "data") orelse {
         return error.InvalidWavData;
