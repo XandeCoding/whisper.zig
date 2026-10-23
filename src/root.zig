@@ -166,17 +166,15 @@ fn handleLog(
     _ = user_data;
 
     switch (level) {
-        @backingInt(LogLevel.DEBUG) => std.log.debug("{s}", .{ text }),
-        @backingInt(LogLevel.INFO) => std.log.info("{s}", .{ text }),
-        @backingInt(LogLevel.WARN) => std.log.warn("{s}", .{ text }),
-        @backingInt(LogLevel.ERROR) => std.log.err("{s}", .{ text }),
+        @backingInt(LogLevel.DEBUG) => std.log.debug("{s}", .{text}),
+        @backingInt(LogLevel.INFO) => std.log.info("{s}", .{text}),
+        @backingInt(LogLevel.WARN) => std.log.warn("{s}", .{text}),
+        @backingInt(LogLevel.ERROR) => std.log.err("{s}", .{text}),
         // TODO: MUST BE DEBUG?
-        @backingInt(LogLevel.CONT) => std.log.debug("{s}", .{ text}),
-        else => {}
+        @backingInt(LogLevel.CONT) => std.log.debug("{s}", .{text}),
+        else => {},
     }
-
 }
-
 
 /// Module to handle audio files
 /// REFACT TO HANDLE FILES AND STREAMING
