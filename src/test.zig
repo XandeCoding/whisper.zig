@@ -16,7 +16,7 @@ test "transcript silence" {
     );
     defer context.deinit();
 
-    const samples = [_]f32{0.0} ** 16000;
+    const samples: [16000]f32 = @splat(0.0);
     try context.transcribe(&samples, .{});
     const count = context.segmentCount();
 
