@@ -17,9 +17,23 @@ pub fn build(b: *std.Build) void {
     const c_module = translate_c.createModule();
     include_ggml_lib(b, whisper_cpp, c_module);
 
-    const whisper_zig = b.addModule("whisper_zig", .{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize, .imports = &.{
-        .{ .name = "c", .module = c_module },
-    } });
+    const whisper_zig = b.addModule(
+        "whisper_zig",
+        .{
+            .root_source_file = b.path("src/root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "c", .module = c_module },
+            },
+        },
+    );
+    // Test flags
+    const test_filters = b.option(
+        []const []const u8,
+        "test-filter",
+        "Skip tests that do not match filters",
+    ) orelse &.{};
 
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -31,6 +45,7 @@ pub fn build(b: *std.Build) void {
             },
             .link_libcpp = true,
         }),
+        .filters = test_filters,
     });
 
     const run_tests = b.addRunArtifact(tests);

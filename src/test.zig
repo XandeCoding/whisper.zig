@@ -11,7 +11,7 @@ test "extract wav samples from file" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
 
-    const samples = try whisper.get_wav_file_samples(io, allocator, "assets/jfk.wav");
+    const samples = try whisper.getWavFileSamples(io, allocator, "assets/jfk.wav");
     defer allocator.free(samples);
 
     try std.testing.expectEqual(176000, samples.len);
@@ -25,8 +25,8 @@ test "receive error extracting invalid wav sample" {
     const allocator = std.testing.allocator;
 
     try std.testing.expectError(
-        error.InvalidWavData,
-        whisper.get_wav_file_samples(io, allocator, "assets/invalid_audio.wav"),
+        error.InvalidWavHeader,
+        whisper.getWavFileSamples(io, allocator, "assets/invalid_audio.wav"),
     );
 }
 
@@ -61,7 +61,12 @@ test "transcript small audio" {
     );
     defer context.deinit();
 
-    try context.transcribe(io, allocator, "assets/jfk.wav", .{ .language = "en" });
+    try context.transcribe(
+        io,
+        allocator,
+        "assets/jfk.wav",
+        .{ .language = "en", .threads = 8 },
+    );
 
     try std.testing.expectEqual(2, context.segmentCount());
     try std.testing.expectEqualStrings(

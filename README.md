@@ -1,5 +1,7 @@
 # whisper.zig
 
+![Zig 0.17.1 Shield](https://img.shields.io/badge/Zig-0.17.1-orange?style=flat-square&logo=Zig)
+
 **whisper.zig** is an idiomatic Zig wrapper around [whisper.cpp](https://github.com/ggerganov/whisper.cpp). It simplifies running Whisper models in Zig and lays the foundation for bindings to other languages (such as Python and JavaScript) via FFI.
 
 ## Status
